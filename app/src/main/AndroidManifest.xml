@@ -63,12 +63,13 @@
         </activity>
 
         <!--
-            The core of the app. The AccessibilityService is used for two
-            reasons:
-              1. it is the only API on Android 11 that can take a screenshot of
-                 another app (AccessibilityService.takeScreenshot, API 30), and
-              2. it keeps our process alive so the floating bubble can be drawn
-                 over other apps.
+            The AccessibilityService is used for two reasons:
+              1. Screenshots are taken through MediaProjection (public since
+                 API 21) and launched from MainActivity, so the service itself no
+                 longer calls takeScreenshot().
+              2. A connected service keeps our process alive, which is what
+                 allows the floating bubble to stay on screen while the user is
+                 in another app.
         -->
         <service
             android:name=".CircleSearchService"

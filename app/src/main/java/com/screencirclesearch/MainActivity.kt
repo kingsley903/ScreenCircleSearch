@@ -4,6 +4,8 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
+import androidx.activity.result.ActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.edit
 import androidx.lifecycle.lifecycleScope
@@ -23,6 +25,11 @@ class MainActivity : AppCompatActivity(), CircleSearchService.ConnectionListener
     private val preferences by lazy {
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
     }
+
+    private var captureHelper: ScreenCaptureHelper? = null
+    private val captureLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result -> handleCaptureResult(result) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,6 +62,7 @@ class MainActivity : AppCompatActivity(), CircleSearchService.ConnectionListener
             startSettings(SettingsCompat.appDetailsIntent(this), 0)
         }
 
+        captureHelper = ScreenCaptureHelper(this)
         CircleSearchService.addListener(this)
 
         // Report whether the OCR model is in place, so a missing traineddata file
@@ -78,6 +86,8 @@ class MainActivity : AppCompatActivity(), CircleSearchService.ConnectionListener
 
     override fun onDestroy() {
         CircleSearchService.removeListener(this)
+        captureHelper?.release()
+        captureHelper = null
         super.onDestroy()
     }
 
@@ -87,7 +97,36 @@ class MainActivity : AppCompatActivity(), CircleSearchService.ConnectionListener
 
     override fun onServiceConnected(service: CircleSearchService) {
         service.setBubbleEnabled(preferences.getBoolean(KEY_BUBBLE_ENABLED, true))
+
+        // The bubble tap is handled here (not in the service) because taking a
+        // screenshot requires the MediaProjection permission dialog, which can
+        // only be launched from an Activity.
+        service.onCaptureRequested = { startScreenCapture() }
         renderState()
+    }
+
+    private fun startScreenCapture() {
+        val helper = captureHelper ?: return
+        helper.requestCapture(
+            onResult = ::onCaptureResult,
+            launchIntent = { intent -> captureLauncher.launch(intent) },
+        )
+    }
+
+    private fun handleCaptureResult(result: ActivityResult) {
+        captureHelper?.handleActivityResult(
+            ScreenCaptureHelper.REQUEST_CODE_CAPTURE,
+            result.resultCode,
+            result.data,
+        )
+    }
+
+    private fun onCaptureResult(outcome: ScreenCaptureHelper.Outcome) {
+        val service = CircleSearchService.instance
+        when (outcome) {
+            is ScreenCaptureHelper.Outcome.Success -> service?.presentSelection(outcome.bitmap)
+            is ScreenCaptureHelper.Outcome.Failure -> service?.onCaptureFailed(outcome.reason)
+        }
     }
 
     override fun onServiceDestroyed() {

@@ -3,6 +3,7 @@ package com.screencirclesearch
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.PixelFormat
+import android.graphics.Point
 import android.graphics.Rect
 import android.os.Build
 import android.util.Log
@@ -175,14 +176,20 @@ class FloatingBubble(
      * Real display bounds, including any area excluded from the app layout by
      * the status bar or a display cutout.
      *
-     * currentWindowMetrics() is the API 30 replacement for the deprecated
-     * getDefaultDisplay().getRealMetrics(). android.util.Point is avoided on
-     * purpose: it is not part of the public API 30 stub, so the fallback below
-     * would not compile.
+     * On API 30+ [WindowManager.getCurrentWindowMetrics] is used; below that
+     * [Display.getRealSize] is the equivalent (now deprecated, but still the only
+     * public option below API 30).
      */
     private fun displayBounds(): Rect {
-        val bounds = windowManager.currentWindowMetrics.bounds
-        return Rect(bounds.left, bounds.top, bounds.right, bounds.bottom)
+        val size = Point()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val bounds = windowManager.currentWindowMetrics.bounds
+            size.set(bounds.width(), bounds.height())
+        } else {
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay.getRealSize(size)
+        }
+        return Rect(0, 0, size.x, size.y)
     }
 
     private fun dp(value: Float): Float = value * density

@@ -59,11 +59,25 @@ ScreenCircleSearch/
 | Android SDK Platform | **android-30** |
 | Android SDK Build-Tools | **30.0.3** |
 | Gradle | 7.0.2 (wrapper included: `gradlew`, `gradlew.bat`, `gradle-wrapper.jar`) |
-| minSdk / targetSdk | 30 / 30 |
+| minSdk / targetSdk | **21 / 30** |
+
+`minSdk 21` (Android 5.0) lets the app run on older devices such as the
+Galaxy S8 (Android 7–9). `targetSdk 30` keeps the Android 11 permission
+behaviour and the scoped-storage opt-out. `compileSdk 30` is still used so the
+project builds against the same API surface it was validated against.
 
 The Gradle wrapper is committed, so `./gradlew` works straight after a clone.
 You only need JDK 11 on `PATH` (or `JAVA_HOME` set). Opening the project in
 Android Studio works as well — Studio uses the wrapper too.
+
+### Screenshots on pre‑Android‑11 devices
+
+`AccessibilityService.takeScreenshot()` only exists on API 30+, so
+**ScreenCircleSearch uses `MediaProjection`** to capture the screen. That API is
+public since API 21, which is why `minSdk` is 21. The trade‑off is that
+MediaProjection requires a one‑off runtime permission: the first time the bubble
+is tapped, Android shows a *"Screen capture?"* dialog and the user must tap
+**Start now**. Once granted, the permission is remembered for the app.
 
 ---
 
@@ -154,18 +168,17 @@ implementation 'com.github.rmtheis:tess-two:9.1.0'   // via JitPack
 
 ## 5. First-run setup on the device
 
-Android 11 grants two of the three required permissions through settings
-screens, not through `requestPermissions()`:
+The first time the floating bubble is tapped, Android asks for the
+**screen-capture** permission (a "Screen capture?" dialog). Tap *Start now* so
+the app can take a screenshot through `MediaProjection`. After that, three
+permissions are involved in total:
 
 1. **Display over other apps** — the app opens
    `Settings.ACTION_MANAGE_OVERLAY_PERMISSION` for your package directly. Tap
    *Grant*.
 2. **Accessibility service** — enable **ScreenCircleSearch** in
    Settings → Accessibility → Installed services.
-   * `android:canTakeScreenshot="true"` in
-     `res/xml/accessibility_service_config.xml` is what makes
-     `takeScreenshot()` legal; without it the call returns
-     `ERROR_TAKE_SCREENSHOT_INCOMPATIBLE`.
+   * The service keeps the floating button alive while you are in other apps.
    * `BIND_ACCESSIBILITY_SERVICE` is not a runtime permission and must never be
      requested in code.
 3. **Floating button** — a toggle on the setup screen. Its position is persisted
@@ -180,14 +193,15 @@ written to disk, so scoped storage on API 30 does not affect the app.
 ## 6. How it works
 
 ```
-CircleSearchService (AccessibilityService)
+CircleSearchService (AccessibilityService, keeps the process alive + hosts overlays)
   │
   ├─ FloatingBubble            TYPE_APPLICATION_OVERLAY, draggable
   │      │  tap
   │      ▼
-  ├─ ScreenCaptureHelper       AccessibilityService.takeScreenshot()
-  │      │  HardwareBuffer → Bitmap.wrap() → copy(ARGB_8888)
-  │      │  (+ blank/secure-window detection)
+  ├─ MainActivity / ScreenCaptureHelper
+  │      │  MediaProjection "Screen capture?" dialog (once, then remembered)
+  │      │  → VirtualDisplay renders into an ImageReader (RGBA_8888 on API 26+,
+  │      │    YUV_420_888 on older devices) → software Bitmap
   │      ▼
   ├─ SelectionOverlay          full-screen overlay showing the frozen
   │      │                    screenshot; SelectionShapeView punches a
@@ -216,25 +230,23 @@ Design points worth knowing:
 * **Secure windows** (`FLAG_SECURE`: password fields, DRM playback, banking
   apps) come back as flat black images. The blank-image check detects this and
   explains it to the user instead of claiming "no text found".
-* `takeScreenshot()` is throttled to one call per 500 ms; a faster second tap
-  returns `ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT`, which is surfaced as
-  "please wait a moment".
+* `requestCapture` is throttled to one request per 500 ms; a faster second tap
+  returns `IntervalTooShort`, which is surfaced as "please wait a moment".
 
-### API 30 gotchas this code works around
+### API level notes
 
-These are the details that make screenshot-based circle-to-search apps fail on
-Android 11; all of them are handled:
+The app used to depend on `AccessibilityService.takeScreenshot()`, which only
+exists on Android 11 (API 30). It now uses `MediaProjection`, which is public
+since API 21, and the `minSdk` was lowered to 21 accordingly. The remaining
+API-version-specific bits handled by the code are:
 
-| Pitfall | What was done |
+| API surface | How it is handled |
 | --- | --- |
-| `AccessibilityService.canTakeScreenshot()` is **not public** in the API 30 SDK (it is `@hide`) | Read `Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES` instead and map `ERROR_TAKE_SCREENSHOT_NO_ACCESSIBILITY_ACCESS` to "service not enabled". |
-| `Bitmap.wrap(Buffer, ColorSpace)` is **not public** in the API 30 SDK either | Use `Bitmap.wrapHardwareBuffer(buffer, colorSpace)`, then `copy(ARGB_8888, false)` for a CPU-side bitmap. |
-| `AccessibilityService.getWindow()` is `@hide` | Overlay windows are added through `getSystemService(WINDOW_SERVICE)` instead. |
-| `ScreenshotResult.getHardwareBuffer()` is deprecated from API 33 but is *the* API 30 accessor | It is used deliberately; `getHardwareBuffers()` does not exist on API 30. The `HardwareBuffer` is always `close()`d in a `finally` block. |
-| The four real API 30 error codes are `..._INTERNAL_ERROR`, `..._INTERVAL_TIME_SHORT`, `..._INVALID_DISPLAY`, `..._NO_ACCESSIBILITY_ACCESS` — there is **no** `SECURE` / `INCOMPATIBLE` constant | Secure windows are detected by inspecting the pixels instead of by error code. |
-| `takeScreenshot()` returns `void` on API 30 | The result is delivered through the callback only. |
-| tess-two 9.1.0 has **no `recycle()`** | `end()` is the native teardown call and is wrapped in `runCatching`. |
-| `android.util.Point` is not in the API 30 public stub | Display bounds come from `WindowManager.currentWindowMetrics.bounds`. |
+| Getting real display size for the VirtualDisplay and the bubble bounds | `WindowManager.getCurrentWindowMetrics()` on API 30+, `Display.getRealSize()` below that. |
+| `Bitmap.wrapHardwareBuffer()` / `ScreenshotResult.getHardwareBuffer()` (API 30/33) | No longer used. `MediaProjection` renders into an `ImageReader`; the `Image` planes are decoded directly. |
+| `ImageReader` pixel format: `RGBA_8888` needs API 26 | `RGBA_8888` on API 26+, `YUV_420_888` with a BT.601 conversion fallback below that. |
+| `layoutInDisplayCutoutMode` (API 28) | Guarded by `SDK_INT >= P`; skipped on older devices (no cutout concept there). |
+| `Activity.startActivityForResult` vs `ActivityResultLauncher` (API 30 deprecation) | Uses `ActivityResultContracts.StartActivityForResult`, which is forward-compatible to all API levels via AndroidX. |
 
 ---
 
@@ -272,11 +284,12 @@ This project was **compiled for real**, not just written out:
 * Kotlin compilation is warning-free, verified with AGP 7.0.4 + Kotlin 1.5.31 +
   Gradle 7.0.2 on JDK 11 against `platforms;android-30`.
 
-What has **not** been done: no physical Android 11 device or emulator was
-available here, so the runtime behaviour (overlay windows, `takeScreenshot()`
-against a real app, Tesseract accuracy) has not been exercised on-device. The
-API usage was validated against the real `android-30/android.jar` with `javap`,
-which is how the `@hide` pitfalls listed in section 6 were found.
+What has **not** been done: no physical device (Android 11 or otherwise) or
+emulator was available here, so the runtime behaviour (overlay windows,
+`MediaProjection` capture against a real app, Tesseract accuracy) has not been
+exercised on-device. The API usage was validated against the real
+`android-30/android.jar` with `javap`, which is how the `@hide` pitfalls were
+found before the move to `MediaProjection`.
 
 ---
 
@@ -291,11 +304,13 @@ which is how the `@hide` pitfalls listed in section 6 were found.
   versions, `cz.adaptech.tesseract4android:tesseract4android-openmp` is the
   maintained alternative — it needs the same `tessdata` folder, but you also
   have to copy `libtesseract.so` and its dependencies into `jniLibs/`.
-* Google Play will scrutinise an AccessibilityService that takes screenshots.
-  If you publish, document the behaviour in the Data Safety section, keep the
-  service limited to what is described here, and be aware that apps in the
-  Play Store's restricted categories cannot use an accessibility service for
-  automation.
+* On Android 11+, an AccessibilityService that is also used... is fine; this app
+  captures the screen through `MediaProjection` (the one-time "Screen capture?"
+  consent dialog), not through the accessibility service, so there is no
+  screenshot-from-accessibility-service behaviour for Play to scrutinise.
+  If you publish, document the MediaProjection capture in the Data Safety
+  section, keep it limited to what is described here, and be aware that apps in
+  the Play Store's restricted categories cannot capture the screen.
 
 ---
 

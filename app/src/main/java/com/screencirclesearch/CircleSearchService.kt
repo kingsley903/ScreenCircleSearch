@@ -16,17 +16,21 @@ import kotlinx.coroutines.launch
  * The engine of the app.
  *
  * Why an AccessibilityService?
- *  - On Android 11 there is exactly one public API that can screenshot another
- *    app: [takeScreenshot], which lives on this class.
- *  - A connected service also keeps our process alive, which is what allows the
- *    floating button to stay on screen while the user is in another app.
+ *  - It keeps our process alive, which is what allows the floating button to
+ *    stay on screen while the user is in another app. Screenshots used to come
+ *    from AccessibilityService.takeScreenshot() (Android 11 only) and are now
+ *    taken through MediaProjection launched by MainActivity instead.
+ *  - It is also the only component that can host overlay windows for the whole
+ *    app lifetime; the AccessibilityService.getWindow() @hide method is not
+ *    used, overlays are added through the regular WindowManager.
  *
  * The service itself never inspects window content; it only reacts to the user
  * tapping our own button.
  *
  * Flow:
- *   tap bubble -> hide bubble -> screenshot -> selection overlay
- *              -> crop -> OCR (offline) -> result panel -> copy / web search
+ *   tap bubble -> hide bubble -> (MainActivity: MediaProjection) -> screenshot
+ *              -> selection overlay -> crop -> OCR (offline)
+ *              -> result panel -> copy / web search
  */
 class CircleSearchService : AccessibilityService() {
 
@@ -40,12 +44,19 @@ class CircleSearchService : AccessibilityService() {
         getSystemService(WINDOW_SERVICE) as WindowManager
     }
 
-    private lateinit var captureHelper: ScreenCaptureHelper
-    private lateinit var ocrManager: OCRManager
-
     private var bubble: FloatingBubble? = null
     private var selection: SelectionOverlayController? = null
     private var resultPanel: ResultPanelOverlay? = null
+
+    private lateinit var ocrManager: OCRManager
+
+    /**
+     * Invoked when the floating bubble is tapped. The actual screenshot capture is
+     * performed by the Activity through [ScreenCaptureHelper] (using MediaProjection),
+     * because the system screen-capture permission dialog must be launched from an
+     * Activity. Set by MainActivity.
+     */
+    var onCaptureRequested: (() -> Unit)? = null
 
     /** Set while a capture is in flight so overlapping taps are ignored. */
     private var busy = false
@@ -55,7 +66,6 @@ class CircleSearchService : AccessibilityService() {
         instance = this
         Log.i(TAG, "AccessibilityService connected")
 
-        captureHelper = ScreenCaptureHelper(applicationContext)
         ocrManager = OCRManager(applicationContext)
 
         // Let MainActivity know the state changed.
@@ -129,6 +139,10 @@ class CircleSearchService : AccessibilityService() {
      *
      * The bubble is hidden before the screenshot is taken - otherwise the user
      * would be selecting our own button instead of the content underneath.
+     *
+     * The actual capture is delegated to MainActivity (via [onCaptureRequested]),
+     * which drives the MediaProjection permission flow; the result comes back
+     * through [presentSelection].
      */
     private fun startSelection() {
         if (busy) return
@@ -139,22 +153,19 @@ class CircleSearchService : AccessibilityService() {
         busy = true
         bubble?.setVisible(false)
 
-        captureHelper.capture(this) { outcome ->
-            when (outcome) {
-                is ScreenCaptureHelper.Outcome.Success -> showSelectionOverlay(outcome.bitmap)
-
-                is ScreenCaptureHelper.Outcome.Failure -> {
-                    busy = false
-                    restoreBubble()
-                    Toast.makeText(this, outcome.reason.messageRes, Toast.LENGTH_LONG).show()
-                }
-            }
+        val request = onCaptureRequested
+        if (request == null) {
+            busy = false
+            restoreBubble()
+            Toast.makeText(this, R.string.error_capture_unavailable, Toast.LENGTH_LONG).show()
+            return
         }
+        request.invoke()
     }
 
-    private fun showSelectionOverlay(screenshot: Bitmap) {
+    /** Called by MainActivity once MediaProjection returned a usable bitmap. */
+    fun presentSelection(screenshot: Bitmap) {
         val controller = SelectionOverlayController(this, overlayWindowManager)
-        // The controller hands the bitmap over instead of recycling it.
         controller.onSelectionConfirmed = { rect, bitmap -> onSelectionConfirmed(bitmap, rect) }
         controller.onCancelled = {
             busy = false
@@ -162,6 +173,13 @@ class CircleSearchService : AccessibilityService() {
         }
         selection = controller
         controller.attach(screenshot)
+    }
+
+    /** Called by MainActivity when capture failed before a bitmap was available. */
+    fun onCaptureFailed(reason: ScreenCaptureHelper.Reason) {
+        busy = false
+        restoreBubble()
+        Toast.makeText(this, reason.messageRes, Toast.LENGTH_LONG).show()
     }
 
     /**

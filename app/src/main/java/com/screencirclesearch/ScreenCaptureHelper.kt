@@ -1,220 +1,338 @@
 package com.screencirclesearch
 
-import android.accessibilityservice.AccessibilityService
+import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.Rect
+import android.graphics.ImageFormat
+import android.graphics.Point
 import android.graphics.RectF
+import android.media.Image
+import android.media.ImageReader
+import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
-import android.view.Display
-import androidx.core.content.ContextCompat
+import android.view.DisplayManager
+import android.view.WindowManager
+import android.hardware.display.VirtualDisplay
 import com.screencirclesearch.BitmapUtils.looksBlank
-import java.util.concurrent.Executor
+import java.nio.ByteBuffer
+import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * Thin wrapper around [android.accessibilityservice.AccessibilityService.takeScreenshot],
- * the only public API on Android 11 (API 30) that can capture another app's
- * screen.
+ * Takes a screenshot of the whole screen using [MediaProjection].
  *
- * The flow is asynchronous: the system hands us a [HardwareBuffer] plus a
- * [android.graphics.ColorSpace] and we have to turn that into a regular
- * software [Bitmap] before it can be cropped, drawn or passed to Tesseract.
+ * This is the cross-version replacement for the API 30
+ * [android.accessibilityservice.AccessibilityService.takeScreenshot] call:
+ * MediaProjection has been public since API 21 (Android 5.0), so the app now
+ * installs and runs on devices between API 21 and API 30+.
+ *
+ * The MediaProjection permission is granted **once** (system "Screen capture?"
+ * dialog) and the resulting [MediaProjection] token is kept for reuse, so later
+ * captures do not re-prompt the user. Each capture builds a throwaway
+ * [VirtualDisplay] + [ImageReader], reads one frame and tears them down while the
+ * [MediaProjection] itself stays alive.
+ *
+ * Usage:
+ * 1. [requestCapture] is called on the foreground [Activity] with a listener.
+ *    If the permission has not been granted yet, the activity-result flow is
+ *    started via [launchIntent]; otherwise capture starts immediately.
+ * 2. Forward the activity result to [handleActivityResult].
+ * 3. A [VirtualDisplay] renders into an [ImageReader]; the first frame is read
+ *    back as a software [Bitmap] on a background thread and handed to the
+ *    listener on the main thread.
+ * 4. The caller owns the bitmap and must recycle it. Call [release] on shutdown.
  */
-class ScreenCaptureHelper(private val appContext: Context) {
+class ScreenCaptureHelper(private val activity: Activity) {
 
     /** Result of a capture attempt. */
     sealed class Outcome {
         data class Success(val bitmap: Bitmap) : Outcome()
-
         data class Failure(val reason: Reason) : Outcome()
     }
 
     /** Why a screenshot could not be taken, mapped to a user facing message. */
     enum class Reason(val messageRes: Int) {
-        /** AccessibilityService not connected, or canTakeScreenshot() == false. */
         UNAVAILABLE(R.string.error_capture_unavailable),
-
-        /** The system refuses two requests that are too close together. */
         INTERVAL_TOO_SHORT(R.string.error_capture_interval),
-
-        /** FLAG_SECURE window: Android blanks the content out. */
         SECURE_WINDOW(R.string.error_capture_secure),
-
-        /** Device/OEM does not implement the API 30 screenshot call. */
         INCOMPATIBLE(R.string.error_capture_incompatible),
-
-        /** Got a buffer back but could not decode it. */
         DECODE_FAILED(R.string.error_capture_generic),
-
-        /** Screenshot succeeded but the result is a flat, empty image. */
         BLANK(R.string.error_capture_blank),
     }
 
+    private val context: Context = activity.applicationContext
+    private val projectionManager by lazy {
+        context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+    }
+    private val windowManager by lazy {
+        context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    }
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val mainExecutor: Executor = ContextCompat.getMainExecutor(appContext)
+    private val bgExecutor = Executors.newSingleThreadExecutor()
 
-    /**
-     * AccessibilityService.takeScreenshot() fails with
-     * ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT when two requests are made
-     * within a fraction of a second. We throttle to be safe - the user has to
-     * tap the bubble, so this never blocks normal use.
-     */
+    /** The persistent MediaProjection token, valid across repeated captures. */
+    private var mediaProjection: MediaProjection? = null
+    private var imageReader: ImageReader? = null
+    private var virtualDisplay: VirtualDisplay? = null
+    /** Listener carried across the permission-dialog round trip. */
+    private var pendingListener: ((Outcome) -> Unit)? = null
+
+    private val minCaptureIntervalMs = 500L
     private var lastCaptureAt = 0L
 
-    /**
-     * True when we can reasonably expect takeScreenshot() to succeed.
-     *
-     * There is deliberately no call to AccessibilityService.canTakeScreenshot()
-     * here: that method exists in the framework but is not part of the public
-     * API 30 SDK (it is marked @hide), so referencing it would not compile
-     * against android-30. What we can check publicly is that our service is
-     * actually listed as enabled - takeScreenshot() fails with
-     * ERROR_TAKE_SCREENSHOT_NO_ACCESSIBILITY_ACCESS otherwise. The
-     * `android:canTakeScreenshot="true"` attribute in
-     * res/xml/accessibility_service_config.xml is what declares that this
-     * service may capture the screen at all.
-     */
-    fun canCapture(service: AccessibilityService?): Boolean =
-        service != null && SettingsCompat.isAccessibilityServiceEnabled(appContext)
+    /** True once the MediaProjection permission has been granted this session. */
+    fun isReady(): Boolean = mediaProjection != null
 
     /**
-     * Requests a screenshot of the default display.
+     * Starts a screenshot. If the MediaProjection permission has already been
+     * granted, capture begins immediately; otherwise the system permission
+     * dialog is launched via [launchIntent] and the result must be forwarded to
+     * [handleActivityResult].
      *
-     * [onResult] is always invoked on the main thread so the caller can touch
-     * views directly. The bitmap is owned by the caller and must be recycled.
+     * [onResult] is invoked on the main thread.
      */
-    fun capture(
-        service: AccessibilityService?,
+    fun requestCapture(
         onResult: (Outcome) -> Unit,
+        launchIntent: (Intent) -> Unit = { intent ->
+            activity.startActivityForResult(intent, REQUEST_CODE_CAPTURE)
+        },
     ) {
-        if (!canCapture(service)) {
-            deliver(onResult, Outcome.Failure(Reason.UNAVAILABLE))
-            return
-        }
-
         val now = SystemClock.elapsedRealtime()
-        if (lastCaptureAt != 0L && now - lastCaptureAt < MIN_CAPTURE_INTERVAL_MS) {
+        if (lastCaptureAt != 0L && now - lastCaptureAt < minCaptureIntervalMs) {
             deliver(onResult, Outcome.Failure(Reason.INTERVAL_TOO_SHORT))
             return
         }
         lastCaptureAt = now
 
+        val projection = mediaProjection
+        if (projection != null) {
+            startCapture(projection, onResult)
+            return
+        }
+
+        // Permission not granted yet: keep the listener and ask the user.
+        pendingListener = onResult
+        val intent = projectionManager.createScreenCaptureIntent()
         try {
-            service!!.takeScreenshot(
-                Display.DEFAULT_DISPLAY,
-                mainExecutor,
-                object : AccessibilityService.TakeScreenshotCallback {
-                    override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
-                        val bitmap = toSoftwareBitmap(screenshot)
-                        if (bitmap == null) {
-                            deliver(onResult, Outcome.Failure(Reason.DECODE_FAILED))
-                            return
-                        }
-                        if (looksBlank(bitmap)) {
-                            // Almost always FLAG_SECURE (password fields, DRM).
-                            bitmap.recycle()
-                            deliver(onResult, Outcome.Failure(Reason.BLANK))
-                            return
-                        }
-                        deliver(onResult, Outcome.Success(bitmap))
-                    }
+            launchIntent(intent)
+        } catch (e: ActivityNotFoundException) {
+            Log.e(TAG, "no activity to start screen capture intent", e)
+            pendingListener = null
+            deliver(onResult, Outcome.Failure(Reason.UNAVAILABLE))
+        }
+    }
 
-                    override fun onFailure(errorCode: Int) {
-                        Log.w(TAG, "takeScreenshot failed with code $errorCode")
-                        deliver(onResult, Outcome.Failure(mapErrorCode(errorCode)))
-                    }
-                }
+    /**
+     * Forward the activity result from [Activity.onActivityResult] (or an
+     * ActivityResultLauncher callback). Returns true when the request code matched.
+     */
+    fun handleActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
+        if (requestCode != REQUEST_CODE_CAPTURE) return false
+        val cb = pendingListener
+        pendingListener = null
+        if (cb == null) return true
+        if (resultCode != Activity.RESULT_OK || data == null) {
+            deliver(cb, Outcome.Failure(Reason.UNAVAILABLE))
+            return true
+        }
+        val projection = try {
+            projectionManager.getMediaProjection(Activity.RESULT_OK, data)
+        } catch (e: Exception) {
+            Log.e(TAG, "could not obtain MediaProjection", e)
+            deliver(cb, Outcome.Failure(Reason.UNAVAILABLE))
+            return true
+        }
+        mediaProjection = projection
+        startCapture(projection, cb)
+        return true
+    }
+
+    private fun startCapture(projection: MediaProjection, onResult: (Outcome) -> Unit) {
+        // Drop any previous in-flight capture before starting a new one.
+        teardownCapture()
+
+        val size = displaySize()
+        if (size.x <= 0 || size.y <= 0) {
+            deliver(onResult, Outcome.Failure(Reason.INCOMPATIBLE))
+            return
+        }
+
+        val format = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ImageFormat.RGBA_8888
+        } else {
+            ImageFormat.YUV_420_888
+        }
+        val densityDpi = context.resources.displayMetrics.densityDpi
+        val reader = try {
+            ImageReader.newInstance(size.x, size.y, format, /*maxImages=*/2)
+        } catch (e: Exception) {
+            Log.e(TAG, "could not create ImageReader", e)
+            deliver(onResult, Outcome.Failure(Reason.INCOMPATIBLE))
+            return
+        }
+        imageReader = reader
+        reader.setOnImageAvailableListener({ onImageAvailable(it) }, mainHandler)
+
+        try {
+            virtualDisplay = projection.createVirtualDisplay(
+                "ScreenCircleSearch",
+                size.x, size.y, densityDpi,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                reader.surface,
+                null,
+                null,
             )
-        } catch (e: Throwable) {
-            Log.e(TAG, "takeScreenshot threw", e)
-            deliver(onResult, Outcome.Failure(Reason.DECODE_FAILED))
+        } catch (e: Exception) {
+            Log.e(TAG, "could not create VirtualDisplay", e)
+            // The projection is likely stale/revoked — forget it so the next
+            // tap re-prompts the user instead of failing forever.
+            mediaProjection = null
+            teardownCapture()
+            deliver(onResult, Outcome.Failure(Reason.INCOMPATIBLE))
+            return
         }
+        // The ImageReader listener owns the listener until a frame arrives.
+        pendingListener = onResult
     }
 
-    /**
-     * Converts the ScreenshotResult into a mutable ARGB_8888 bitmap.
-     *
-     * The result is a HardwareBuffer in a possibly wide colour space
-     * (Display.P3 on some devices), which the CPU cannot read directly.
-     * Bitmap.wrapHardwareBuffer() maps it, and copy() then produces a CPU side
-     * bitmap we can crop, draw and finally hand to Tesseract.
-     */
-    @Suppress("DEPRECATION")
-    private fun toSoftwareBitmap(
-        screenshot: AccessibilityService.ScreenshotResult,
-    ): Bitmap? {
-        val buffer = try {
-            // getHardwareBuffer() is the API 30 accessor. It is only deprecated
-            // from API 33 on, where getHardwareBuffers() (a list) took over, but
-            // the single-buffer variant still works and is what we need.
-            screenshot.hardwareBuffer
-        } catch (e: Throwable) {
-            Log.e(TAG, "could not read HardwareBuffer", e)
-            null
-        } ?: return null
-
-        return try {
-            val colorSpace = try {
-                screenshot.colorSpace
-            } catch (e: Throwable) {
-                null
+    private fun onImageAvailable(reader: ImageReader) {
+        val cb = pendingListener
+        if (cb == null) return
+        pendingListener = null
+        val image = try { reader.acquireLatestImage() } catch (e: Exception) { null }
+        if (image == null) return
+        // Decode the (potentially large) image off the main thread.
+        bgExecutor.execute {
+            var bitmap: Bitmap? = null
+            var decodeFailed = false
+            try {
+                bitmap = toBitmap(image)
+            } catch (e: Exception) {
+                Log.e(TAG, "failed to decode image", e)
+                decodeFailed = true
+            } finally {
+                try { image.close() } catch (e: Exception) { }
+                // The VirtualDisplay/ImageReader are throwaway; only stop them
+                // here. The MediaProjection itself is kept for reuse.
+                teardownCapture()
             }
 
-            // Bitmap.wrapHardwareBuffer() is the API 30 public entry point.
-            // Bitmap.wrap(Buffer, ColorSpace) is @hide and cannot be used.
-            val wrapped = Bitmap.wrapHardwareBuffer(buffer, colorSpace)
-            if (wrapped == null) {
-                Log.e(TAG, "wrapHardwareBuffer() returned null")
-                return null
-            }
-
-            val software = wrapped.copy(Bitmap.Config.ARGB_8888, false)
-            wrapped.recycle()
-
-            if (software != null && software.width > 0 && software.height > 0) {
-                software
+            val outcome = if (decodeFailed || bitmap == null) {
+                Outcome.Failure(Reason.DECODE_FAILED)
+            } else if (looksBlank(bitmap)) {
+                bitmap.recycle()
+                Outcome.Failure(Reason.BLANK)
             } else {
-                software?.recycle()
-                null
+                Outcome.Success(bitmap)
             }
-        } catch (e: Throwable) {
-            Log.e(TAG, "failed to decode HardwareBuffer", e)
-            null
-        } finally {
-            // The buffer is a shared resource: always hand it back, otherwise
-            // the compositor runs out of buffers.
-            runCatching { buffer.close() }
+            mainHandler.post { deliver(cb, outcome) }
         }
     }
 
-    /**
-     * Maps the platform error codes of takeScreenshot().
-     *
-     * These are the four constants that actually exist in the API 30 SDK. The
-     * SECURE_WINDOW / INCOMPATIBLE reasons are not reported through onFailure
-     * on Android 11 - a secure window comes back as flat black pixels and is
-     * detected by the blank-image check instead.
-     */
-    private fun mapErrorCode(errorCode: Int): Reason = when (errorCode) {
-        AccessibilityService.ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT ->
-            Reason.INTERVAL_TOO_SHORT
+    private fun toBitmap(image: Image): Bitmap? {
+        val w = image.width
+        val h = image.height
+        if (w <= 0 || h <= 0) return null
+        return when (image.format) {
+            ImageFormat.RGBA_8888 -> rgbaToBitmap(image, w, h)
+            ImageFormat.YUV_420_888 -> yuvToBitmap(image, w, h)
+            else -> yuvToBitmap(image, w, h)
+        }
+    }
 
-        AccessibilityService.ERROR_TAKE_SCREENSHOT_NO_ACCESSIBILITY_ACCESS ->
-            Reason.UNAVAILABLE
+    /** Converts a single-plane RGBA_8888 image into an ARGB_8888 bitmap. */
+    private fun rgbaToBitmap(image: Image, w: Int, h: Int): Bitmap? {
+        val plane = image.planes[0]
+        val buffer: ByteBuffer = plane.buffer
+        val pixelStride = plane.pixelStride
+        val rowStride = plane.rowStride
+        if (pixelStride <= 0 || rowStride <= 0) return null
 
-        AccessibilityService.ERROR_TAKE_SCREENSHOT_INVALID_DISPLAY ->
-            Reason.INCOMPATIBLE
+        val pixels = IntArray(w * h)
+        for (y in 0 until h) {
+            val rowStart = y * rowStride
+            for (x in 0 until w) {
+                buffer.position(rowStart + x * pixelStride)
+                // RGBA_8888 lays bytes out as R, G, B, A in memory.
+                val r = buffer.get().toInt() and 0xff
+                val g = buffer.get().toInt() and 0xff
+                val b = buffer.get().toInt() and 0xff
+                val a = buffer.get().toInt() and 0xff
+                pixels[y * w + x] = (a shl 24) or (r shl 16) or (g shl 8) or b
+            }
+        }
+        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        bitmap.setPixels(pixels, 0, w, 0, 0, w, h)
+        return bitmap
+    }
 
-        AccessibilityService.ERROR_TAKE_SCREENSHOT_INTERNAL_ERROR ->
-            Reason.DECODE_FAILED
+    /** Converts a YUV_420_888 image into an ARGB_8888 bitmap (API 21 fallback). */
+    private fun yuvToBitmap(image: Image, w: Int, h: Int): Bitmap? {
+        val yPlane = image.planes[0]
+        val uPlane = image.planes[1]
+        val vPlane = image.planes[2]
 
-        else -> Reason.DECODE_FAILED
+        val yBytes = ByteArray(yPlane.buffer.remaining())
+        val uBytes = ByteArray(uPlane.buffer.remaining())
+        val vBytes = ByteArray(vPlane.buffer.remaining())
+        if (yBytes.isEmpty() || uBytes.isEmpty() || vBytes.isEmpty()) return null
+        yPlane.buffer.get(yBytes)
+        uPlane.buffer.get(uBytes)
+        vPlane.buffer.get(vBytes)
+
+        val yRowStride = yPlane.rowStride
+        val uRowStride = uPlane.rowStride
+        val vRowStride = vPlane.rowStride
+        val yPixelStride = yPlane.pixelStride
+        val uPixelStride = uPlane.pixelStride
+        val vPixelStride = vPlane.pixelStride
+
+        val pixels = IntArray(w * h)
+        for (row in 0 until h) {
+            val yRow = row * yRowStride
+            val uRow = (row / 2) * uRowStride
+            val vRow = (row / 2) * vRowStride
+            for (col in 0 until w) {
+                val yVal = (yBytes[yRow + col * yPixelStride].toInt() and 0xff)
+                val uVal = (uBytes[uRow + (col / 2) * uPixelStride].toInt() and 0xff) - 128
+                val vVal = (vBytes[vRow + (col / 2) * vPixelStride].toInt() and 0xff) - 128
+
+                // BT.601 full range. Shift operators bind looser than + in
+                // Kotlin, so the per-channel term is wrapped before the shift.
+                var r = yVal + ((91881 * vVal + 32768) shr 16)
+                var g = yVal - ((22554 * uVal + 46839 * vVal + 32768) shr 16)
+                var b = yVal + ((116130 * uVal + 32768) shr 16)
+                if (r < 0) r = 0 else if (r > 255) r = 255
+                if (g < 0) g = 0 else if (g > 255) g = 255
+                if (b < 0) b = 0 else if (b > 255) b = 255
+                pixels[row * w + col] = -0x1000000 or (r shl 16) or (g shl 8) or b
+            }
+        }
+        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        bitmap.setPixels(pixels, 0, w, 0, 0, w, h)
+        return bitmap
+    }
+
+    private fun displaySize(): Point {
+        val size = Point()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val bounds = windowManager.currentWindowMetrics.bounds
+            size.set(bounds.width(), bounds.height())
+        } else {
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay.getRealSize(size)
+        }
+        return size
     }
 
     private fun deliver(onResult: (Outcome) -> Unit, outcome: Outcome) {
@@ -225,22 +343,36 @@ class ScreenCaptureHelper(private val appContext: Context) {
         }
     }
 
+    private fun teardownCapture() {
+        try { virtualDisplay?.release() } catch (e: Exception) { }
+        imageReader?.let { try { it.close() } catch (e: Exception) { } }
+        virtualDisplay = null
+        imageReader = null
+    }
+
+    private fun releaseProjection() {
+        teardownCapture()
+        mediaProjection?.let { try { it.stop() } catch (e: Exception) { } }
+        mediaProjection = null
+    }
+
+    /** Call when the host Activity is torn down. */
+    fun release() {
+        pendingListener = null
+        releaseProjection()
+        bgExecutor.shutdownNow()
+    }
+
     companion object {
         private const val TAG = "ScreenCaptureHelper"
-        private const val MIN_CAPTURE_INTERVAL_MS = 500L
+        const val REQUEST_CODE_CAPTURE = 1001
 
-        /**
-         * Smallest sensible selection in bitmap pixels, scaled by screen size
-         * so that the same threshold works on a 720p and a 1440p device.
-         */
         fun minSelectionSize(bitmapWidth: Int, bitmapHeight: Int): Int =
             max(48, (minOf(bitmapWidth, bitmapHeight) * 0.06f).roundToInt())
 
-        /** Utility used by the selection view to normalise a drag rectangle. */
         fun normalizeRect(left: Float, top: Float, right: Float, bottom: Float): RectF =
             RectF(minOf(left, right), minOf(top, bottom), maxOf(left, right), maxOf(top, bottom))
 
-        /** True when both coordinates are effectively the same point. */
         fun isTap(x1: Float, y1: Float, x2: Float, y2: Float, slopPx: Float = 24f): Boolean =
             abs(x1 - x2) <= slopPx && abs(y1 - y2) <= slopPx
     }

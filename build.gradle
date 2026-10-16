@@ -8,10 +8,13 @@ buildscript {
         kotlin_version = '1.5.31'
         agp_version = '7.0.4'
 
-        // Android SDK levels. The app is designed for Android 11 (API 30) only.
+        // Android SDK levels. The app compiles and targets Android 11 (API 30) but
+        // runs on anything from Android 5.0 (Lollipop, API 21) upwards. Screenshots
+        // are taken through MediaProjection, which is public since API 21, so we no
+        // longer depend on the API 30 AccessibilityService.takeScreenshot() call.
         compile_sdk = 30
         target_sdk = 30
-        min_sdk = 30
+        min_sdk = 21
     }
 }
 
