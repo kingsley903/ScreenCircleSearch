@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/background"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <!-- Header -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/main_title"
+            android:textAppearance="@style/TextAppearance.ScreenCircleSearch.Title" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="@string/app_tagline"
+            android:textAppearance="@style/TextAppearance.ScreenCircleSearch.Body" />
+
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:background="@color/brand_primary"
+            android:padding="14dp"
+            android:text="@string/status_service_disabled"
+            android:textColor="@color/brand_on_primary"
+            android:textSize="14sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="26dp"
+            android:layout_marginBottom="10dp"
+            android:text="@string/permissions_heading"
+            android:textAppearance="@style/TextAppearance.ScreenCircleSearch.SectionTitle" />
+
+        <!-- 1. Overlay permission -->
+        <com.google.android.material.card.MaterialCardView
+            style="@style/Widget.ScreenCircleSearch.Card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/permission_overlay_title"
+                    android:textAppearance="@style/TextAppearance.ScreenCircleSearch.SectionTitle" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/permission_overlay_body"
+                    android:textAppearance="@style/TextAppearance.ScreenCircleSearch.Body" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/overlayPermissionButton"
+                    style="@style/Widget.ScreenCircleSearch.Button"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="@string/action_grant"
+                    app:icon="@drawable/ic_search_lens" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- 2. Accessibility service -->
+        <com.google.android.material.card.MaterialCardView
+            style="@style/Widget.ScreenCircleSearch.Card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/permission_accessibility_title"
+                    android:textAppearance="@style/TextAppearance.ScreenCircleSearch.SectionTitle" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/permission_accessibility_body"
+                    android:textAppearance="@style/TextAppearance.ScreenCircleSearch.Body" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/accessibilityButton"
+                    style="@style/Widget.ScreenCircleSearch.Button"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="@string/action_enable"
+                    app:icon="@drawable/ic_search_lens" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- 3. Floating bubble -->
+        <com.google.android.material.card.MaterialCardView
+            style="@style/Widget.ScreenCircleSearch.Card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/permission_bubble_title"
+                    android:textAppearance="@style/TextAppearance.ScreenCircleSearch.SectionTitle" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/permission_bubble_body"
+                    android:textAppearance="@style/TextAppearance.ScreenCircleSearch.Body" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/bubbleButton"
+                    style="@style/Widget.ScreenCircleSearch.Button.Outlined"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="@string/action_show" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- Privacy note -->
+        <com.google.android.material.card.MaterialCardView
+            style="@style/Widget.ScreenCircleSearch.Card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            app:cardBackgroundColor="#FFF1F8E9">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/privacy_heading"
+                    android:textAppearance="@style/TextAppearance.ScreenCircleSearch.SectionTitle" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/privacy_body"
+                    android:textAppearance="@style/TextAppearance.ScreenCircleSearch.Body" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- Troubleshooting link straight into the app details page -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/appSettingsButton"
+            style="@style/Widget.ScreenCircleSearch.Button.Outlined"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginTop="18dp"
+            android:layout_marginBottom="12dp"
+            android:text="@string/action_open_settings" />
+
+    </LinearLayout>
+</ScrollView>

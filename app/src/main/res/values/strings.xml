@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <string name="app_name">ScreenCircleSearch</string>
+    <string name="app_tagline">Draw a circle on anything to read it</string>
+
+    <!-- Main screen -->
+    <string name="main_title">Circle to Search</string>
+    <string name="main_intro">Select any area of your screen with a circle or a
+        rectangle. The selected region is processed completely offline by
+        on-device OCR (Tesseract) and you can then search or copy the text.</string>
+    <string name="permissions_heading">Setup</string>
+    <string name="permission_overlay_title">1. Display over other apps</string>
+    <string name="permission_overlay_body">Needed so the floating button and the
+        selection overlay can be drawn on top of the app you are using.</string>
+    <string name="permission_accessibility_title">2. Accessibility service</string>
+    <string name="permission_accessibility_body">Android 11 only allows screen
+        capture through an Accessibility service. This service is used
+        exclusively to take the screenshot of the area you select - it does not
+        read, log or upload any other content.</string>
+    <string name="permission_bubble_title">3. Floating button</string>
+    <string name="permission_bubble_body">The draggable button that starts a
+        selection from inside any app.</string>
+    <string name="action_grant">Grant</string>
+    <string name="action_open_settings">Open settings</string>
+    <string name="action_granted">Granted</string>
+    <string name="action_enable">Enable</string>
+    <string name="action_disable">Disable</string>
+    <string name="action_show">Show</string>
+    <string name="action_hide">Hide</string>
+
+    <string name="bubble_description">Circle search button. Drag to move it, tap
+        to select a region of the screen.</string>
+    <string name="status_ready">Ready. Tap the blue button anywhere to select text.</string>
+    <string name="status_overlay_missing">Grant the \"Display over other apps\"
+        permission to use the floating button.</string>
+    <string name="status_service_disabled">Enable the accessibility service to
+        enable screen capture.</string>
+
+    <string name="privacy_heading">Privacy</string>
+    <string name="privacy_body">Screenshots are kept in memory only and the
+        temporary crop is deleted as soon as OCR finishes. Text recognition runs
+        offline; nothing is uploaded. The INTERNET permission is only used when
+        you explicitly tap \"Search\".</string>
+
+    <!-- Selection overlay -->
+    <string name="selection_hint">Drag a circle (or rectangle) around what you
+        want to read, then tap Extract</string>
+    <string name="selection_hint_too_small">Drag further to select a bigger
+        area</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_extract">Extract</string>
+    <string name="action_shape_circle">Circle</string>
+    <string name="action_shape_rectangle">Rectangle</string>
+
+    <!-- Result panel -->
+    <string name="result_title">Recognised text</string>
+    <string name="result_loading">Reading the image…</string>
+    <string name="result_confidence">Confidence: %1$d%%</string>
+    <string name="result_no_text">No text was found in the selected area. Try
+        selecting a slightly bigger region, or make sure the text is not too
+        small.</string>
+    <string name="result_ocr_failed">The OCR engine could not be started. Check
+        that assets/tessdata/eng.traineddata is present in the APK.</string>
+    <string name="result_search">Search</string>
+    <string name="result_copy">Copy</string>
+    <string name="result_new">New selection</string>
+    <string name="result_close">Close</string>
+    <string name="result_copied">Text copied to clipboard</string>
+    <string name="result_copied_nothing">There is no text to copy</string>
+    <string name="result_nothing_to_search">There is no text to search for</string>
+
+    <!-- Errors -->
+    <string name="error_capture_unavailable">Screen capture is not available.
+        Make sure the accessibility service is enabled.</string>
+    <string name="error_capture_interval">Please wait a moment before taking
+        another screenshot.</string>
+    <string name="error_capture_secure">This screen is protected (it contains
+        sensitive content such as a password field) and cannot be captured.</string>
+    <string name="error_capture_incompatible">This device does not support
+        screenshot capture through the accessibility service.</string>
+    <string name="error_capture_generic">The screenshot could not be taken.</string>
+    <string name="error_capture_blank">The screen looks empty or fully hidden -
+        nothing to read.</string>
+    <string name="error_no_browser">No browser is available to perform the
+        search.</string>
+
+    <!-- Accessibility service strings (shown in Android settings) -->
+    <string name="accessibility_service_label">ScreenCircleSearch</string>
+    <string name="accessibility_service_summary">Take a screenshot of the region
+        you select so text can be read offline.</string>
+    <string name="accessibility_service_description">Allows ScreenCircleSearch to
+        take a screenshot of the current screen when you tap the floating
+        button, so that the selected area can be processed by on-device text
+        recognition. The app does not inspect, store or transmit any other screen
+        content.</string>
+
+</resources>

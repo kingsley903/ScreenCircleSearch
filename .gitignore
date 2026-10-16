@@ -1,0 +1,25 @@
+# Android Studio / IntelliJ
+.idea/
+*.iml
+.gradle/
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Local configuration (machine specific)
+local.properties
+
+# Keystores - never commit these
+*.jks
+*.keystore
+
+# Tesseract language models are ~4-23 MB binaries. The fast English model is
+# committed here so the project builds and runs out of the box; swap in the
+# full tessdata_best model locally if you want maximum accuracy and do not want
+# it in version control.
+# app/src/main/assets/tessdata/*.traineddata
+
+# OS noise
+.DS_Store
+Thumbs.db

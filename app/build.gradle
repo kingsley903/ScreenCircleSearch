@@ -1,0 +1,123 @@
+apply plugin: 'com.android.application'
+apply plugin: 'org.jetbrains.kotlin.android'
+
+android {
+    compileSdkVersion rootProject.ext.compile_sdk
+
+    defaultConfig {
+        applicationId 'com.screencirclesearch'
+        minSdkVersion rootProject.ext.min_sdk
+        targetSdkVersion rootProject.ext.target_sdk
+        versionCode 1
+        versionName '1.0'
+
+        // Tesseract native libraries. tess-two ships prebuilt .so files for all
+        // four ABIs, so we only have to tell the build to keep them.
+        ndk {
+            //noinspection ChromeOsAbiSupport
+            abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
+        }
+    }
+
+    buildTypes {
+        debug {
+            // Keeps the generated APK debuggable and signed with the debug key.
+            minifyEnabled false
+        }
+        release {
+            // R8 is safe here as long as the Tesseract JNI entry points are kept
+            // (see proguard-rules.pro). Enable only after checking OCR output.
+            minifyEnabled false
+            shrinkResources false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+
+    buildFeatures {
+        viewBinding true
+    }
+
+    // JitPack AARs frequently ship duplicate META-INF entries, which breaks the
+    // packaging step. Excluding them is safe.
+    packagingOptions {
+        resources {
+            excludes += [
+                    'META-INF/DEPENDENCIES',
+                    'META-INF/LICENSE',
+                    'META-INF/LICENSE.txt',
+                    'META-INF/LICENSE.md',
+                    'META-INF/NOTICE',
+                    'META-INF/NOTICE.txt',
+                    'META-INF/NOTICE.md',
+                    'META-INF/*.kotlin_module',
+            ]
+        }
+    }
+
+    lint {
+        // A missing tessdata file is a build-time concern, not a lint failure.
+        abortOnError false
+    }
+}
+
+dependencies {
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
+
+    // AndroidX / Material Design. Versions below are the last ones that are
+    // happy to compile against compileSdk 30.
+    implementation 'androidx.appcompat:appcompat:1.3.1'
+    implementation 'androidx.core:core-ktx:1.6.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.1'
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.3.1'
+    implementation 'com.google.android.material:material:1.4.0'
+
+    // Coroutines are used to keep OCR off the main thread.
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.5.2'
+
+    // Offline OCR. tess-two is the JitPack fork of the original TessTwo library
+    // and is published under the com.github.rmtheis group id:
+    //
+    //     com.github.rmtheis:tess-two:9.1.0
+    //
+    // It bundles the native libtesseract .so files in the AAR, but the trained
+    // data files (eng.traineddata) are NOT bundled - see the checkTessData task
+    // below and the README for how to obtain them.
+    implementation 'com.github.rmtheis:tess-two:9.1.0'
+}
+
+// -----------------------------------------------------------------------------
+// Helper task: check that the Tesseract language model is in place.
+// -----------------------------------------------------------------------------
+// IMPORTANT: the tess-two AAR ships the native libraries (jni/<abi>/libtess.so
+// and friends) but it does NOT ship any *.traineddata model files. You have to
+// download eng.traineddata yourself (see README, section 3) and put it in
+//     app/src/main/assets/tessdata/eng.traineddata
+// This task only verifies that and prints where to get the file.
+//
+//     ./gradlew :app:checkTessData
+tasks.register('checkTessData') {
+    group = 'tesseract'
+    description = 'Verifies that assets/tessdata/eng.traineddata is present.'
+
+    doLast {
+        def target = file('src/main/assets/tessdata/eng.traineddata')
+        if (target.exists()) {
+            def mb = (target.length() / 1024d / 1024d).round(1)
+            logger.lifecycle("[tesseract] OK: ${target} (${mb} MB)")
+        } else {
+            logger.warn("[tesseract] MISSING: ${target}")
+            logger.warn("[tesseract] Download it from https://github.com/tesseract-ocr/tessdata")
+            logger.warn("[tesseract] (file: tessdata/raw/eng.traineddata or tessdata_fast/eng.traineddata)")
+            logger.warn("[tesseract] OCR will report an error until the file is added.")
+        }
+    }
+}

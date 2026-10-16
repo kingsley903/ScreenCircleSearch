@@ -1,0 +1,25 @@
+// Top level build file for ScreenCircleSearch.
+//
+// Version choices are deliberately pinned to versions that are compatible with
+// compileSdk 30 (Android 11) and that still work with JDK 11, which is what
+// Android Gradle Plugin 7.x requires.
+buildscript {
+    ext {
+        kotlin_version = '1.5.31'
+        agp_version = '7.0.4'
+
+        // Android SDK levels. The app is designed for Android 11 (API 30) only.
+        compile_sdk = 30
+        target_sdk = 30
+        min_sdk = 30
+    }
+}
+
+plugins {
+    id 'com.android.application' version "$agp_version" apply false
+    id 'org.jetbrains.kotlin.android' version "$kotlin_version" apply false
+}
+
+tasks.register('clean', Delete) {
+    delete rootProject.buildDir
+}

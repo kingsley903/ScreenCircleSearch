@@ -1,0 +1,24 @@
+// Gradle settings for ScreenCircleSearch.
+//
+// The Tesseract wrapper (tess-two) is published on JitPack, so that repository
+// has to be declared here as well as in the top level build.gradle file.
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+        maven { url 'https://jitpack.io' }
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+    repositories {
+        google()
+        mavenCentral()
+        maven { url 'https://jitpack.io' }
+    }
+}
+
+rootProject.name = 'ScreenCircleSearch'
+include ':app'
